@@ -1,0 +1,12 @@
+# Downloaded source files (large, not needed in repo)
+pytania.xlsx
+multimedia_do_pytan.zip
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
