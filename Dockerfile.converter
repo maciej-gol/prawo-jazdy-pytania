@@ -1,6 +1,6 @@
-FROM alpine:3.20
+FROM ubuntu:22.04
 
-RUN apk add --no-cache ffmpeg bash
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/docker-convert.sh /convert.sh
 RUN chmod +x /convert.sh
