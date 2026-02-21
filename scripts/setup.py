@@ -9,6 +9,7 @@ What it does:
   4. Extracts JPG images → media/
   5. Extracts WMV files to a temp dir, then converts them in parallel to WebM
      using a Docker container built from Dockerfile.converter (requires Docker).
+  6. Marks questions whose media file is absent from media/ as mediaMissing=True.
 
 Requirements:
   uv run scripts/setup.py   (installs dependencies automatically via pyproject.toml)
@@ -243,7 +244,7 @@ def extract_and_convert(questions: list[dict]) -> None:
         else:
             videos_to_convert.add(wmv_name)
 
-    print(f"[4/5] Extracting from zip: {len(needed_images)} images, "
+    print(f"[4/6] Extracting from zip: {len(needed_images)} images, "
           f"{len(videos_to_convert)} WMV files ({videos_skip} WebMs already exist) …")
 
     images_done = 0
@@ -294,12 +295,12 @@ def extract_and_convert(questions: list[dict]) -> None:
         # --- Docker conversion ---
         if not videos_to_convert:
             if videos_skip:
-                print(f"[5/5] All {videos_skip} WebM files already exist. Skipping conversion.")
+                print(f"[5/6] All {videos_skip} WebM files already exist. Skipping conversion.")
             else:
-                print("[5/5] No video files needed.")
+                print("[5/6] No video files needed.")
             return
 
-        print(f"[5/5] Converting {wmv_extracted} WMV → WebM via Docker …")
+        print(f"[5/6] Converting {wmv_extracted} WMV → WebM via Docker …")
 
         if not docker_available():
             print("  WARNING: Docker is not available. Skipping video conversion.")
@@ -335,6 +336,20 @@ def extract_and_convert(questions: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 6 – Mark questions whose media file is absent from media/
+# ---------------------------------------------------------------------------
+def mark_missing_media(questions: list[dict]) -> None:
+    """Set mediaMissing=True in-place for questions whose media file is absent."""
+    missing = 0
+    for q in questions:
+        if q.get("media"):
+            if not os.path.exists(os.path.join(MEDIA_DIR, q["media"])):
+                q["mediaMissing"] = True
+                missing += 1
+    print(f"[6/6] Checked media presence: {missing} questions marked mediaMissing=True.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -348,6 +363,8 @@ def main() -> None:
     write_json(questions)
     ensure_zip()
     extract_and_convert(questions)
+    mark_missing_media(questions)
+    write_json(questions)
 
     print()
     print("=== Setup complete! ===")

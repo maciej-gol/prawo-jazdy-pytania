@@ -82,8 +82,9 @@ function pickRandom(arr, n) {
 }
 
 function createSession() {
-  const basic       = ALL_QUESTIONS.filter(q => q.structure === "PODSTAWOWY");
-  const specialist  = ALL_QUESTIONS.filter(q => q.structure === "SPECJALISTYCZNY");
+  const usable      = ALL_QUESTIONS.filter(q => !q.mediaMissing);
+  const basic       = usable.filter(q => q.structure === "PODSTAWOWY");
+  const specialist  = usable.filter(q => q.structure === "SPECJALISTYCZNY");
 
   const picked = [
     ...pickRandom(basic, BASIC_COUNT),
