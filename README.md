@@ -16,6 +16,7 @@ Hostowana statycznie na GitHub Pages — bez backendu, stan zapisywany w przegl�
 
 ## Źródła danych
 
+- Strona Ministerstwa ze szczegółami egzaminu: https://www.gov.pl/web/infrastruktura/prawo-jazdy
 - Pytania (xlsx): https://www.gov.pl/attachment/c694a7f2-9374-4f54-94e7-7e52c52f6332
 - Multimedia (zip, ≈8.8 GB): https://www.gov.pl/pliki/mi/multimedia_do_pytan.zip
 
@@ -24,23 +25,14 @@ Hostowana statycznie na GitHub Pages — bez backendu, stan zapisywany w przegl�
 ### Wymagania
 
 - [uv](https://docs.astral.sh/uv/) (menedżer pakietów Python)
-- `ffmpeg` dostępny w PATH (do konwersji filmów WMV → WebM)
+- [Docker](https://docs.docker.com/get-docker/) (do konwersji filmów WMV → WebM)
 
 ```bash
 # Instalacja uv (jeśli brak):
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Sprawdź czy ffmpeg jest zainstalowany:
-ffmpeg -version
-
-# Instalacja na Ubuntu/Debian:
-sudo apt install ffmpeg
-
-# Instalacja na macOS (Homebrew):
-brew install ffmpeg
-
-# Instalacja na Windows (winget):
-winget install Gyan.FFmpeg
+# Sprawdź czy Docker jest dostępny:
+docker info
 ```
 
 ### Uruchomienie skryptu konfiguracyjnego
@@ -56,9 +48,10 @@ Skrypt:
 2. Wygeneruje plik `questions.json` z pytaniami kategorii B
 3. Pobierze archiwum multimediów (**≈8.8 GB** — może trwać długo)
 4. Wyodrębni zdjęcia JPG do folderu `media/`
-5. Skonwertuje filmy WMV → WebM (wymaga ffmpeg)
+5. Wyodrębni pliki WMV do katalogu tymczasowego
+6. Zbuduje obraz Docker z ffmpeg i skonwertuje wszystkie filmy **równolegle** (`Dockerfile.converter`)
 
-> **Uwaga:** Pobieranie archiwum multimediów zajmie dużo czasu. Skrypt można przerwać i wznowić — już pobrane pliki zostaną pominięte.
+> **Uwaga:** Pobieranie archiwum multimediów zajmie dużo czasu. Skrypt można przerwać i wznowić — już pobrane i przekonwertowane pliki zostaną pominięte.
 
 ## Testowanie lokalne
 
@@ -96,5 +89,5 @@ Następnie otwórz w przeglądarce: **http://localhost:8000**
 ## Uwagi
 
 - **System punktowy:** Oficjalny egzamin używa ważonych punktów (max. 74 pkt, próg 68 pkt). Aplikacja wyświetla wynik procentowy jako przybliżenie.
-- **Filmy:** Pliki WMV nie są obsługiwane przez przeglądarki — skrypt konwertuje je do formatu WebM. Bez ffmpeg pytania z filmami wyświetlą się bez materiału wideo.
+- **Filmy:** Pliki WMV nie są obsługiwane przez przeglądarki — skrypt konwertuje je do formatu WebM przy użyciu Dockera z ffmpeg. Konwersja odbywa się równolegle (tyle wątków, ile rdzeni CPU). Bez Dockera pytania z filmami wyświetlą się bez materiału wideo.
 - **Prywatność:** Wszystkie dane (historia sesji, statystyki) są zapisywane wyłącznie lokalnie w przeglądarce (`localStorage`).

@@ -2,6 +2,10 @@
 pytania.xlsx
 multimedia_do_pytan.zip
 
+# WMV video files (source format — converted to WebM by setup.py)
+*.wmv
+*.WMV
+
 # Python cache
 __pycache__/
 *.py[cod]

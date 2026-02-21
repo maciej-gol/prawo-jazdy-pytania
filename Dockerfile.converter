@@ -1,0 +1,10 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache ffmpeg bash
+
+COPY scripts/docker-convert.sh /convert.sh
+RUN chmod +x /convert.sh
+
+# Input WMV files must be mounted at /input (read-only)
+# Output WebM files will be written to /output
+ENTRYPOINT ["/convert.sh"]

@@ -7,12 +7,13 @@ What it does:
   2. Parses it and generates questions.json filtered to category B
   3. Downloads the multimedia archive (if not already present) — 8.8 GB, takes a while
   4. Extracts JPG images → media/
-  5. Converts WMV videos (referenced by category-B questions) → WebM via ffmpeg → media/
+  5. Extracts WMV files to a temp dir, then converts them in parallel to WebM
+     using a Docker container built from Dockerfile.converter (requires Docker).
 
 Requirements:
   uv run scripts/setup.py   (installs dependencies automatically via pyproject.toml)
   -or- pip install openpyxl requests
-  ffmpeg available on PATH (for video conversion)
+  Docker available on PATH (for video conversion)
 """
 
 import json
@@ -67,10 +68,13 @@ def download(url: str, dest: str) -> None:
     print("  Done.")
 
 
-def ffmpeg_available() -> bool:
+DOCKER_IMAGE = "prawo-jazdy-converter"
+
+
+def docker_available() -> bool:
     try:
         subprocess.run(
-            ["ffmpeg", "-version"],
+            ["docker", "info"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
@@ -80,23 +84,18 @@ def ffmpeg_available() -> bool:
         return False
 
 
-def wmv_to_webm(src_path: str, dst_path: str) -> bool:
-    """Convert a WMV file to WebM (VP9). Returns True on success."""
+def build_docker_image() -> bool:
+    """Build the ffmpeg converter Docker image. Returns True on success."""
+    print("  Building Docker converter image …")
     result = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",                   # overwrite without asking
-            "-i", src_path,
-            "-c:v", "libvpx-vp9",
-            "-b:v", "0",
-            "-crf", "35",           # quality 0-63, lower = better; 35 is good enough for practice
-            "-an",                   # strip audio (not needed for these clips)
-            dst_path,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        ["docker", "build", "-f", "Dockerfile.converter", "-t", DOCKER_IMAGE, "."],
+        cwd=REPO_ROOT,
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        print("  ERROR: Docker build failed.")
+        return False
+    print("  Image built successfully.")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +215,9 @@ def ensure_zip() -> None:
 # Steps 4 & 5 – Extract images and convert videos
 # ---------------------------------------------------------------------------
 def extract_and_convert(questions: list[dict]) -> None:
+    import shutil
+    import tempfile
+
     os.makedirs(MEDIA_DIR, exist_ok=True)
 
     # Build sets of original filenames needed
@@ -231,77 +233,105 @@ def extract_and_convert(questions: list[dict]) -> None:
         else:
             needed_images.add(orig)
 
-    print(f"[4/5] Extracting {len(needed_images)} images …")
+    # Determine which WMV files still need conversion (skip already-done ones)
+    videos_to_convert: set[str] = set()
+    videos_skip = 0
+    for wmv_name in needed_videos:
+        webm_name = os.path.splitext(wmv_name)[0] + ".webm"
+        if os.path.exists(os.path.join(MEDIA_DIR, webm_name)):
+            videos_skip += 1
+        else:
+            videos_to_convert.add(wmv_name)
+
+    print(f"[4/5] Extracting from zip: {len(needed_images)} images, "
+          f"{len(videos_to_convert)} WMV files ({videos_skip} WebMs already exist) …")
 
     images_done = 0
     images_skip = 0
+    wmv_extracted = 0
+    not_found = 0
 
-    with zipfile.ZipFile(ZIP_PATH, "r") as zf:
-        # Build a lookup: basename → full zip path
-        name_map: dict[str, str] = {}
-        for member in zf.namelist():
-            name_map[os.path.basename(member).lower()] = member
+    # Extract everything in a single pass through the zip
+    wmv_temp_dir = tempfile.mkdtemp(prefix="prawo-jazdy-wmv-")
+    try:
+        with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+            # Case-insensitive lookup: lowercase basename → full zip member path
+            name_map: dict[str, str] = {}
+            for member in zf.namelist():
+                name_map[os.path.basename(member).lower()] = member
 
-        for img_name in needed_images:
-            dst = os.path.join(MEDIA_DIR, img_name)
-            if os.path.exists(dst):
-                images_skip += 1
-                continue
-            zipped = name_map.get(img_name.lower())
-            if zipped is None:
-                print(f"  WARNING: {img_name} not found in zip")
-                continue
-            with zf.open(zipped) as src, open(dst, "wb") as out:
-                out.write(src.read())
-            images_done += 1
+            # --- Images ---
+            for img_name in needed_images:
+                dst = os.path.join(MEDIA_DIR, img_name)
+                if os.path.exists(dst):
+                    images_skip += 1
+                    continue
+                zipped = name_map.get(img_name.lower())
+                if zipped is None:
+                    not_found += 1
+                    continue
+                with zf.open(zipped) as src, open(dst, "wb") as out:
+                    out.write(src.read())
+                images_done += 1
 
-        print(f"  Extracted {images_done} images ({images_skip} already existed).")
+            print(f"  Images: {images_done} extracted, "
+                  f"{images_skip} already existed, {not_found} not found in zip.")
 
-        has_ffmpeg = ffmpeg_available()
-        if not has_ffmpeg:
-            print("[5/5] WARNING: ffmpeg not found. Skipping video conversion.")
-            print("      Install ffmpeg and re-run this script to enable video questions.")
+            # --- WMV files → temp dir ---
+            if videos_to_convert:
+                for wmv_name in videos_to_convert:
+                    zipped = name_map.get(wmv_name.lower())
+                    if zipped is None:
+                        not_found += 1
+                        continue
+                    dst = os.path.join(wmv_temp_dir, wmv_name)
+                    with zf.open(zipped) as src, open(dst, "wb") as out:
+                        out.write(src.read())
+                    wmv_extracted += 1
+                print(f"  WMV:    {wmv_extracted} extracted to temp dir "
+                      f"({len(videos_to_convert) - wmv_extracted} not found in zip).")
+
+        # --- Docker conversion ---
+        if not videos_to_convert:
+            if videos_skip:
+                print(f"[5/5] All {videos_skip} WebM files already exist. Skipping conversion.")
+            else:
+                print("[5/5] No video files needed.")
             return
 
-        print(f"[5/5] Converting {len(needed_videos)} WMV → WebM …")
+        print(f"[5/5] Converting {wmv_extracted} WMV → WebM via Docker …")
 
-        videos_done = 0
-        videos_skip = 0
-        videos_fail = 0
+        if not docker_available():
+            print("  WARNING: Docker is not available. Skipping video conversion.")
+            print("  Install Docker and re-run this script to enable video questions.")
+            return
 
-        for wmv_name in sorted(needed_videos):
-            webm_name = os.path.splitext(wmv_name)[0] + ".webm"
-            dst_webm = os.path.join(MEDIA_DIR, webm_name)
-            if os.path.exists(dst_webm):
-                videos_skip += 1
-                continue
+        if not build_docker_image():
+            return
 
-            # Extract WMV to a temp path inside MEDIA_DIR
-            tmp_wmv = os.path.join(MEDIA_DIR, "_tmp_" + wmv_name)
-            zipped = name_map.get(wmv_name.lower())
-            if zipped is None:
-                print(f"  WARNING: {wmv_name} not found in zip")
-                videos_fail += 1
-                continue
-
-            with zf.open(zipped) as src, open(tmp_wmv, "wb") as out:
-                out.write(src.read())
-
-            ok = wmv_to_webm(tmp_wmv, dst_webm)
-            os.remove(tmp_wmv)
-
-            if ok:
-                videos_done += 1
-                if videos_done % 50 == 0:
-                    print(f"  … {videos_done}/{len(needed_videos)} videos converted")
-            else:
-                print(f"  WARNING: conversion failed for {wmv_name}")
-                videos_fail += 1
-
-        print(
-            f"  Videos: {videos_done} converted, "
-            f"{videos_skip} already existed, {videos_fail} failed."
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm",
+                "-v", f"{wmv_temp_dir}:/input:ro",
+                "-v", f"{MEDIA_DIR}:/output",
+                DOCKER_IMAGE,
+            ],
         )
+
+        if result.returncode != 0:
+            print(f"  ERROR: Docker conversion exited with code {result.returncode}.")
+        else:
+            converted = sum(
+                1 for wmv in videos_to_convert
+                if os.path.exists(
+                    os.path.join(MEDIA_DIR, os.path.splitext(wmv)[0] + ".webm")
+                )
+            )
+            print(f"  Converted {converted}/{wmv_extracted} videos successfully "
+                  f"({videos_skip} were already done).")
+
+    finally:
+        shutil.rmtree(wmv_temp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -322,9 +352,9 @@ def main() -> None:
     print()
     print("=== Setup complete! ===")
     print("Next steps:")
-    print(f"  1. Commit questions.json and media/ to git")
-    print(f"  2. cd {REPO_ROOT} && python -m http.server 8000")
-    print(f"  3. Open http://localhost:8000 in your browser")
+    print(f"  1. git add questions.json media/ && git commit -m 'Add question data and media'")
+    print(f"  2. git push")
+    print(f"  3. uv run python -m http.server 8000  (then open http://localhost:8000)")
 
 
 if __name__ == "__main__":
